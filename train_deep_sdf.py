@@ -254,7 +254,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     specs = ws.load_experiment_specifications(experiment_directory)
 
-    logging.info("Experiment description: \n" + specs["Description"])
+    logging.info("Experiment description: \n" + str(specs["Description"]))
 
     data_source = specs["DataSource"]
     train_split_file = specs["TrainSplit"]
@@ -331,7 +331,8 @@ def main_function(experiment_directory, continue_from, batch_split):
     logging.info("training with {} GPU(s)".format(torch.cuda.device_count()))
 
     # if torch.cuda.device_count() > 1:
-    decoder = torch.nn.DataParallel(decoder)
+        # print("num of gpu = ", torch.cuda.device_count())
+    # decoder = torch.nn.DataParallel(decoder)
 
     num_epochs = specs["NumEpochs"]
     log_frequency = get_spec_with_default(specs, "LogFrequency", 10)
@@ -352,6 +353,7 @@ def main_function(experiment_directory, continue_from, batch_split):
         shuffle=True,
         num_workers=num_data_loader_threads,
         drop_last=True,
+        prefetch_factor=20
     )
 
     logging.debug("torch num_threads: {}".format(torch.get_num_threads()))
@@ -362,7 +364,7 @@ def main_function(experiment_directory, continue_from, batch_split):
 
     logging.debug(decoder)
 
-    lat_vecs = torch.nn.Embedding(num_scenes, latent_size, max_norm=code_bound)
+    lat_vecs = torch.nn.Embedding(num_scenes, latent_size, max_norm=code_bound).cuda()
     torch.nn.init.normal_(
         lat_vecs.weight.data,
         0.0,
@@ -459,7 +461,11 @@ def main_function(experiment_directory, continue_from, batch_split):
 
         adjust_learning_rate(lr_schedules, optimizer_all, epoch)
 
+        s1 = time.time()
         for sdf_data, indices in sdf_loader:
+            # print("get batch data running time = ", time.time() - s1)
+            sdf_data = sdf_data.to('cuda', non_blocking=True)
+            indices = indices.to('cuda', non_blocking=True)
 
             # Process the input data
             sdf_data = sdf_data.reshape(-1, 4)
@@ -489,7 +495,7 @@ def main_function(experiment_directory, continue_from, batch_split):
             for i in range(batch_split):
 
                 batch_vecs = lat_vecs(indices[i])
-
+                # s = time.time()
                 input = torch.cat([batch_vecs, xyz[i]], dim=1)
 
                 # NN optimization
@@ -511,6 +517,7 @@ def main_function(experiment_directory, continue_from, batch_split):
                 chunk_loss.backward()
 
                 batch_loss += chunk_loss.item()
+                # print("running time = ", time.time() - s)
 
             logging.debug("loss = {}".format(batch_loss))
 
@@ -522,10 +529,14 @@ def main_function(experiment_directory, continue_from, batch_split):
 
             optimizer_all.step()
 
+            # s1 = time.time()
+
         end = time.time()
 
         seconds_elapsed = end - start
         timing_log.append(seconds_elapsed)
+
+        logging.info("Running time of one epoch = " + str(end - start))
 
         lr_log.append([schedule.get_learning_rate(epoch) for schedule in lr_schedules])
 
